@@ -1,0 +1,9 @@
+[project]
+name = "portHamiltonian"
+version = "0.1.0"
+description = "Simulation of electrical circuits using the Port Hamiltonian approach"
+
+dependencies = [
+    "pandas",
+    "numpy",
+]

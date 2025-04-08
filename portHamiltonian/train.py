@@ -9,8 +9,11 @@ import matplotlib.pyplot as plt
 from torchdiffeq import odeint
 # from torchdiffeq import odeint_adjoint as odeint
 
+from datetime import datetime
+
 from data import PortHamiltonianDataset
 from model import PHNODE
+from utils import *
 
 # Default to float64 since small scale
 torch.set_default_dtype(torch.float64)
@@ -19,7 +22,7 @@ def train_one_epoch(iteration, writer: SummaryWriter, dataloader, model: nn.Modu
     model.train()
 
     batch_loss = 0.0
-    for batch, (x0, t, y) in enumerate(dataloader):
+    for batch, (x0, t, y, u) in enumerate(dataloader):
         optimizer.zero_grad()
 
         loss = 0.0
@@ -27,11 +30,10 @@ def train_one_epoch(iteration, writer: SummaryWriter, dataloader, model: nn.Modu
         # Integrate ODE for each initial condition
 
         for i in range(batch_size):
-            x_batch = x0[i].unsqueeze(0)
-            y_batch = y[i].unsqueeze(0)
-            y_pred = odeint(model, x_batch, t[i], method='rk4')
+            control = lambda tt : input_interp(tt, t[i], u[i])
+            y_pred = model.solve_ode(t[i], x0[i].unsqueeze(0), control)
             # Compute loss over full trajectories
-            loss += loss_fn(y_pred.squeeze(), y_batch.squeeze())
+            loss += loss_fn(y_pred.squeeze(), y[i])
 
         # Clip gradients
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -42,11 +44,12 @@ def train_one_epoch(iteration, writer: SummaryWriter, dataloader, model: nn.Modu
         batch_loss += loss.item()
     
     print(f"Iter {iteration} batch loss: {batch_loss}")
-    writer.add_scalar("train/loss", batch_loss, iteration)
+    if writer is not None:
+        writer.add_scalar("train/loss", batch_loss, iteration)
 
     return batch_loss / len(dataloader)
 
-def validate(iteration, writer, dataloader, model, loss_fn):
+def validate(iteration, writer, dataloader, model, loss_fn, plot_dir=None, log_scale=True):
     model.eval()
 
     ys = []
@@ -54,15 +57,17 @@ def validate(iteration, writer, dataloader, model, loss_fn):
     T = []
     x0 = None
 
-    for batch, (x,dt,y) in enumerate(dataloader):
+    for batch, (x,dt,y,u) in enumerate(dataloader):
         # enumerating over trajectories
         if batch == 0: # TODO: only validate over the first trajectory
             x0 = x
             T = dt.squeeze()
             ys = y.squeeze(dim=0)
+            u = u.squeeze()
 
-
-    y_preds = odeint(model, x0, T).squeeze(dim=1)
+    # y_preds = odeint(model, x0, T).squeeze(dim=1)
+    control = lambda t : input_interp(t, T, u)
+    y_preds = model.solve_ode(T, x0, control).squeeze(dim=1)
 
     val_loss = loss_fn(y_preds, ys) / len(T)
     T = T.tolist()
@@ -70,46 +75,59 @@ def validate(iteration, writer, dataloader, model, loss_fn):
     ys = ys.detach().tolist()
     y_preds = y_preds.detach().tolist()
     
-    plt.plot(T, np.log(ys), label=[r"$q$", r"$\phi$"])
-    plt.plot(T, np.log(y_preds), label=[r"$\hat{q}$", r"$\hat\phi$"])
+    plot_dir = os.path.join(writer.log_dir, "plots") if plot_dir is None else plot_dir
+    plot_path = os.path.join(plot_dir, f"val_{iteration}.png")
+
+    if log_scale:
+        ys = np.log(ys)
+        y_preds = np.log(y_preds)
+    
+    plt.plot(T, ys, label=[r"$q$", r"$\phi$"])
+    plt.plot(T, y_preds, label=[r"$\hat{q}$", r"$\hat\phi$"])
     plt.legend()
     plt.xlabel(r"Time $[s]$")
-    plt.ylabel(r"$\log{x}$")
-    plt.savefig(os.path.join(writer.log_dir, "plots", f"val_{iteration}.png"))
+    if log_scale:
+        plt.ylabel(r"$\log{x}$")
+    else:
+        plt.ylabel(r"$x$")
+    plt.savefig(plot_path)
     plt.clf()
     plt.close()
 
-    writer.add_scalar("val/loss", val_loss, iteration)
+    if writer is not None:
+        writer.add_scalar("val/loss", val_loss, iteration)
 
     return val_loss
 
-def train():
+def train(mode: str = "open"):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
-    data_dir = os.path.join(os.path.abspath(os.curdir), "data")
-    train_data = PortHamiltonianDataset(os.path.join(data_dir, "train_data.pkl"), device, training=True)
-    val_data = PortHamiltonianDataset(os.path.join(data_dir, "val_data.pkl"), device, training=False)
-    test_data = PortHamiltonianDataset(os.path.join(data_dir, "test_data.pkl"), device, training=False)
+    data_dir = "OpenLoop" if mode == "open" else "ClosedLoop"
+    data_dir = os.path.join(os.path.abspath(os.curdir), "data", data_dir)
+    train_data = PortHamiltonianDataset(os.path.join(data_dir, "train_data.pkl"), device, training=True, dataset=mode)
+    val_data = PortHamiltonianDataset(os.path.join(data_dir, "val_data.pkl"), device, training=False, dataset=mode)
+    test_data = PortHamiltonianDataset(os.path.join(data_dir, "test_data.pkl"), device, training=False, dataset=mode)
 
-    writer = SummaryWriter()
+    log_dir = os.path.join("runs", datetime.now().strftime("%b%d_%H:%M:%S") + "_" + mode)
+    writer = SummaryWriter(log_dir)
     os.makedirs(os.path.join(writer.log_dir, "plots"))
 
-    total_epochs = int(1.5e3)
+    total_epochs = int(5e3)
     batch_size = 128
     val_interval = 10
-    learning_rate = 4e-3
+    learning_rate = 1e-3
 
     net_cfg = {"hidden_dim": 16, "in_dim": 2}
 
     duty = 15 / 35
     r = 30
-    J = torch.tensor([[0, -duty], [duty, 0]], device=device)
+    # J = torch.tensor([[0, -duty], [duty, 0]], device=device)
     R = torch.tensor([[0, 0], [0, 1/r]], device=device)
     B = torch.tensor([[1], [0]], device=device)
     E = torch.tensor(15.0)
 
-    model = PHNODE(J, R, B, E, net_cfg, device)
+    model = PHNODE(R, B, E, net_cfg, device)
 
     optimizer = AdamW(model.parameters(), lr=learning_rate)
     loss_fn = nn.MSELoss()
@@ -133,7 +151,7 @@ def train():
             else:
                 print(f"Iter {epoch} val loss: {val_loss} > best val loss {best_val_loss}")
         
-        if best_val_loss < 1e-9:
+        if best_val_loss < 1e-10:
             print(f"Loss is sufficiently small. Terminating training at epoch {epoch}...")
             break
 
@@ -142,7 +160,13 @@ def train():
 
     test_loss = validate(epoch, writer, test_dataloader, model, loss_fn)
     print(f"Test loss: {test_loss}")
-        
-
+    
 if __name__ == "__main__":
-    train()
+    from argparse import ArgumentParser
+    parser = ArgumentParser()
+    parser.add_argument("--mode", type=str, default="open")
+    args = parser.parse_args()
+
+    assert(args.mode in ["open", "closed"]), f"Invalid argument {args.mode}"
+
+    train(args.mode)

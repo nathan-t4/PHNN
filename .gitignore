@@ -2,3 +2,10 @@
 portHamiltonian/runs/
 *zip
 *plecs
+*__pycache__*
+tests/
+algorithm.py
+*Trajectories
+*.txt
+*.png
+*.pyc

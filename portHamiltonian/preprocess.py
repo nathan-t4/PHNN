@@ -16,7 +16,7 @@ def openLoop():
         to_remove = []
         last_time = 0
         min_dt = 1e-7
-        max_timesteps = 1.5e4
+        max_timesteps = 3e4
 
         for i,t in enumerate(df):
             if abs(t-last_time) < min_dt:
@@ -209,13 +209,13 @@ def closedLoop():
 if __name__ == "__main__":
     from argparse import ArgumentParser
     parser = ArgumentParser()
-    parser.add_argument("--type", type=str, default="open")
+    parser.add_argument("--mode", type=str, default="open")
 
     args = parser.parse_args()
 
-    assert(args.type in ["open", "closed"])
+    assert(args.mode in ["open", "closed"])
 
-    if args.type == "open":
+    if args.mode == "open":
         openLoop()
     else:
         closedLoop()

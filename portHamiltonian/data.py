@@ -3,7 +3,7 @@ import pandas as pd
 from torch.utils.data import Dataset
 
 class PortHamiltonianDataset(Dataset):
-    def __init__(self, dir, device, dataset="closed", training=True, min_sequence_length=128, max_sequence_length=128):
+    def __init__(self, dir, device, dataset="closed", training=True, min_sequence_length=1, max_sequence_length=1, traj_scale=None):
         """
         Modified to handle full trajectories for ODE integration
         """
@@ -15,6 +15,7 @@ class PortHamiltonianDataset(Dataset):
 
         self.min_sequence_length = min_sequence_length
         self.max_sequence_length = max_sequence_length
+        self.traj_scale = traj_scale
         
         if dataset == "open":
             num_timesteps, num_trajs = df.shape
@@ -34,12 +35,14 @@ class PortHamiltonianDataset(Dataset):
         if self.dataset == "open":            
             # Store time points
             self.times = torch.tensor(df["T"].to_numpy(), device=self.device)
+            self.t_scale = self.times[-1] - self.times[0]
 
             df = df.drop(["T"], axis=1)
             
             # Store each trajectory
             for i, col in enumerate(df):
                 self.trajectories[i] = torch.tensor(df[col].tolist(), device=self.device)
+            
             
         elif self.dataset == "closed":
             for i, data in enumerate(df["data"].values()):
@@ -51,16 +54,20 @@ class PortHamiltonianDataset(Dataset):
                 self.times[i] = torch.tensor(time[:num_timesteps], device=self.device)
             
             self.control = 1 - self.control # Required due to data format
+            self.t_scale = (self.times[:,-1] - self.times[:,0]).mean(dim=0)
         
         # Normalize if needed
         with torch.no_grad():
             self.traj_mean = self.trajectories.mean(dim=(0,1), keepdim=True)
             self.traj_std = self.trajectories.std(dim=(0,1), keepdim=True)
-        #     self.trajectories = (self.trajectories - self.traj_mean) / self.traj_std
+            if traj_scale is None:
+                self.traj_scale = self.traj_std
+            self.trajectories = self.trajectories / self.traj_scale
 
         print("Data statistics:")
         print(f"Mean: {self.traj_mean}")
         print(f"Std: {self.traj_std}")
+        print(f"Scale: {self.traj_scale}")
             
     def __len__(self):
         if self.training:

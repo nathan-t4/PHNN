@@ -103,31 +103,36 @@ def train(mode: str = "open"):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
+    SEQUENCE_LENGTH = 32
+
     data_dir = "OpenLoop" if mode == "open" else "ClosedLoop"
     data_dir = os.path.join(os.path.abspath(os.curdir), "data", data_dir)
-    train_data = PortHamiltonianDataset(os.path.join(data_dir, "train_data.pkl"), device, training=True, dataset=mode)
-    val_data = PortHamiltonianDataset(os.path.join(data_dir, "val_data.pkl"), device, training=False, dataset=mode)
-    test_data = PortHamiltonianDataset(os.path.join(data_dir, "test_data.pkl"), device, training=False, dataset=mode)
+    train_data = PortHamiltonianDataset(os.path.join(data_dir, "train_data.pkl"), device, training=True, dataset=mode, min_sequence_length=SEQUENCE_LENGTH)
+
+    val_data = PortHamiltonianDataset(os.path.join(data_dir, "val_data.pkl"), device, training=False, dataset=mode, traj_scale=train_data.traj_scale)
+    test_data = PortHamiltonianDataset(os.path.join(data_dir, "test_data.pkl"), device, training=False, dataset=mode, traj_scale=train_data.traj_scale)
 
     log_dir = os.path.join("runs", datetime.now().strftime("%b%d_%H:%M:%S") + "_" + mode)
     writer = SummaryWriter(log_dir)
     os.makedirs(os.path.join(writer.log_dir, "plots"))
 
     total_epochs = int(5e3)
-    batch_size = 128
+    batch_size = 128 # try varying this
     val_interval = 10
     learning_rate = 1e-3
 
     net_cfg = {"hidden_dim": 16, "in_dim": 2}
 
-    duty = 15 / 35
     r = 30
+    # duty = 15 / 35
     # J = torch.tensor([[0, -duty], [duty, 0]], device=device)
     R = torch.tensor([[0, 0], [0, 1/r]], device=device)
     B = torch.tensor([[1], [0]], device=device)
     E = torch.tensor(15.0)
 
-    model = PHNODE(R, B, E, net_cfg, device)
+    scale = 1 / train_data.traj_scale # TODO divide by t1 - t0
+
+    model = PHNODE(R, B, E, scale, net_cfg, device)
 
     optimizer = AdamW(model.parameters(), lr=learning_rate)
     loss_fn = nn.MSELoss()
@@ -136,7 +141,7 @@ def train(mode: str = "open"):
     val_dataloader = DataLoader(val_data, batch_size=1, shuffle=False)
     test_dataloader = DataLoader(test_data, batch_size=1, shuffle=False)
 
-    best_val_loss = validate(0, writer, val_dataloader, model, loss_fn)
+    best_val_loss = validate(0, writer, val_dataloader, model, loss_fn, log_scale=True)
     best_val_loss = 1.0
 
     for epoch in range(total_epochs):

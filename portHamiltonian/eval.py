@@ -15,7 +15,8 @@ def eval(mode: str = "open"):
     exp_name = "Apr08_11:19:20_closed"
     # exp_name = "Apr08_10:53:59_closed"
     # exp_name = "Apr08_10:53:20_open"
-    exp_name = "Apr08_13:29:48_open"
+    exp_name = "Apr08_14:58:40_closed"
+    exp_name = "Apr09_11:14:39_open"
     path = os.path.join(os.curdir, "runs", exp_name, "best_model.pth")
     state_dict = torch.load(path, weights_only=True)
 

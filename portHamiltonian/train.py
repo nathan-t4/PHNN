@@ -11,12 +11,15 @@ from torchdiffeq import odeint
 
 from datetime import datetime
 
-from data import PortHamiltonianDataset
+from portHamiltonian.datasets.boost_converter import PortHamiltonianDataset
 from model import PHNODE
 from utils import *
+from configs.get_config import get_config
 
 # Default to float64 since small scale
 torch.set_default_dtype(torch.float64)
+# The control
+E = torch.tensor(15.0)
 
 def train_one_epoch(iteration, writer: SummaryWriter, dataloader, model: nn.Module, loss_fn, optimizer):
     model.train()
@@ -31,7 +34,7 @@ def train_one_epoch(iteration, writer: SummaryWriter, dataloader, model: nn.Modu
 
         for i in range(batch_size):
             control = lambda tt : input_interp(tt, t[i], u[i])
-            y_pred = model.solve_ode(t[i], x0[i].unsqueeze(0), control)
+            y_pred = model.solve_ode(t[i], x0[i].unsqueeze(0), E, control)
             # Compute loss over full trajectories
             loss += loss_fn(y_pred.squeeze(), y[i])
 
@@ -67,7 +70,7 @@ def validate(iteration, writer, dataloader, model, loss_fn, plot_dir=None, log_s
 
     # y_preds = odeint(model, x0, T).squeeze(dim=1)
     control = lambda t : input_interp(t, T, u)
-    y_preds = model.solve_ode(T, x0, control).squeeze(dim=1)
+    y_preds = model.solve_ode(T, x0, E, control).squeeze(dim=1)
 
     val_loss = loss_fn(y_preds, ys) / len(T)
     T = T.tolist()
@@ -99,16 +102,13 @@ def validate(iteration, writer, dataloader, model, loss_fn, plot_dir=None, log_s
 
     return val_loss
 
-def train(mode: str = "open"):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def train(config, mode: str = "open"):
+    device = config.training.device
     print(f"Device: {device}")
-
-    SEQUENCE_LENGTH = 32
 
     data_dir = "OpenLoop" if mode == "open" else "ClosedLoop"
     data_dir = os.path.join(os.path.abspath(os.curdir), "data", data_dir)
-    train_data = PortHamiltonianDataset(os.path.join(data_dir, "train_data.pkl"), device, training=True, dataset=mode, min_sequence_length=SEQUENCE_LENGTH)
-
+    train_data = PortHamiltonianDataset(os.path.join(data_dir, "train_data.pkl"), device, training=True, dataset=mode, min_sequence_length=config.data.sequence_length)
     val_data = PortHamiltonianDataset(os.path.join(data_dir, "val_data.pkl"), device, training=False, dataset=mode, traj_scale=train_data.traj_scale)
     test_data = PortHamiltonianDataset(os.path.join(data_dir, "test_data.pkl"), device, training=False, dataset=mode, traj_scale=train_data.traj_scale)
 
@@ -116,37 +116,22 @@ def train(mode: str = "open"):
     writer = SummaryWriter(log_dir)
     os.makedirs(os.path.join(writer.log_dir, "plots"))
 
-    total_epochs = int(5e3)
-    batch_size = 128 # try varying this
-    val_interval = 10
-    learning_rate = 1e-3
+    scale = 1 / train_data.traj_scale if config.data.scale else 1.0 # TODO divide by t1 - t0
+    model = PHNODE(scale, config.system_matrices, config.net_cfg, device)
 
-    net_cfg = {"hidden_dim": 16, "in_dim": 2}
-
-    r = 30
-    # duty = 15 / 35
-    # J = torch.tensor([[0, -duty], [duty, 0]], device=device)
-    R = torch.tensor([[0, 0], [0, 1/r]], device=device)
-    B = torch.tensor([[1], [0]], device=device)
-    E = torch.tensor(15.0)
-
-    scale = 1 / train_data.traj_scale # TODO divide by t1 - t0
-
-    model = PHNODE(R, B, E, scale, net_cfg, device)
-
-    optimizer = AdamW(model.parameters(), lr=learning_rate)
+    optimizer = AdamW(model.parameters(), lr=config.training.learning_rate)
     loss_fn = nn.MSELoss()
 
-    train_dataloader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
+    train_dataloader = DataLoader(train_data, batch_size=config.training.batch_size, shuffle=True)
     val_dataloader = DataLoader(val_data, batch_size=1, shuffle=False)
     test_dataloader = DataLoader(test_data, batch_size=1, shuffle=False)
 
     best_val_loss = validate(0, writer, val_dataloader, model, loss_fn, log_scale=True)
     best_val_loss = 1.0
 
-    for epoch in range(total_epochs):
+    for epoch in range(config.training.total_epochs):
         train_one_epoch(epoch, writer, train_dataloader, model, loss_fn, optimizer)
-        if epoch % val_interval == 0:
+        if epoch % config.training.val_interval == 0:
             val_loss = validate(epoch, writer, val_dataloader, model, loss_fn)
             if val_loss < best_val_loss:
                 print(f"Iter {epoch} val loss: {val_loss} < best val loss {best_val_loss}")
@@ -170,8 +155,11 @@ if __name__ == "__main__":
     from argparse import ArgumentParser
     parser = ArgumentParser()
     parser.add_argument("--mode", type=str, default="open")
+    parser.add_argument("--dataset", type=str)
     args = parser.parse_args()
 
     assert(args.mode in ["open", "closed"]), f"Invalid argument {args.mode}"
-
-    train(args.mode)
+    assert(args.dataset in ["boost_converter"]), f"Invalid dataset {args.dataset}"
+    
+    config = get_config(args.dataset)
+    train(config, args.mode)

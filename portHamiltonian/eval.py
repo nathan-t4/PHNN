@@ -3,8 +3,8 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from portHamiltonian.datasets.boost_converter import PortHamiltonianDataset
-from model import PHNODE
-from train import validate
+from portHamiltonian.models.get_model import PHNODE
+from portHamiltonian.old_train import validate
 
 def eval(mode: str = "open"):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

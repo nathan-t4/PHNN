@@ -1,7 +1,9 @@
-from portHamiltonian.configs.boost_converter import get_boost_converter_config
+from configs.boost_converter import get_boost_converter_config
+from configs.toy_distribution_grid import get_toy_distribution_grid_config
 
 configs = {
-    "boost_converter": get_boost_converter_config()
+    "boost_converter": get_boost_converter_config(),
+    "toy_distribution_grid": get_toy_distribution_grid_config(),
 }
 
 def get_config(name):

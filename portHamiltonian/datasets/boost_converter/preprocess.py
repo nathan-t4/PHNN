@@ -5,8 +5,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 
-def openLoop():
-    trajs_path = os.path.abspath(os.path.join(os.curdir, "data", "OpenLoop", "Trajectories"))
+def openLoopBC():
+    trajs_path = os.path.abspath(os.path.join(os.curdir, "..", "data", "OpenLoop", "Trajectories"))
 
     data_df = pd.DataFrame()
     T = None
@@ -105,7 +105,7 @@ def openLoop():
     # val_df.to_pickle(os.path.join(save_path, "val_data.pkl"))
     # test_df.to_pickle(os.path.join(save_path, "test_data.pkl"))
 
-def closedLoop():
+def closedLoopBC():
     trajs_path = os.path.abspath(os.path.join(os.curdir, "data", "ClosedLoop", "Trajectories"))
 
     data_df = {}
@@ -216,6 +216,6 @@ if __name__ == "__main__":
     assert(args.mode in ["open", "closed"])
 
     if args.mode == "open":
-        openLoop()
+        openLoopBC()
     else:
-        closedLoop()
+        closedLoopBC()

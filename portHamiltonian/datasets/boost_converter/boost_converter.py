@@ -2,7 +2,7 @@ import torch
 import pandas as pd
 from torch.utils.data import Dataset
 
-class PortHamiltonianDataset(Dataset):
+class BoostConverterDataset(Dataset):
     def __init__(self, dir, device, dataset="closed", training=True, min_sequence_length=1, max_sequence_length=1, traj_scale=None):
         """
         Modified to handle full trajectories for ODE integration

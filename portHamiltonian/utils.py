@@ -18,3 +18,15 @@ def input_interp(t, timepoints, input_vals):
         val_interp = input_vals[len(input_vals)-1]
     
     return val_interp
+
+def get_matrix_input(system_name, t=None, duty_factor=None, state=None, validation=False):
+    if system_name == "boost_converter":
+        if validation:
+            return lambda tt : input_interp(tt, t, duty_factor)
+        else:
+            return lambda tt, idx : input_interp(tt, t[idx], duty_factor[idx])
+    elif "mass_spring" in system_name:
+        if validation:
+            return lambda tt, idx : input_interp(tt, t[idx], state[idx])
+        else:
+            return lambda tt : input_interp(tt, t, state)

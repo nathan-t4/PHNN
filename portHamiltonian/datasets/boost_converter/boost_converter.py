@@ -21,6 +21,7 @@ class BoostConverterDataset(Dataset):
             num_timesteps, num_trajs = df.shape
             control_norm = 15.0 / 35.0
         else:
+            
             num_timesteps = min([len(data) for data in df["data"].values()])
             num_trajs = len(df["data"].keys())
             control_norm = 0.0
@@ -30,7 +31,8 @@ class BoostConverterDataset(Dataset):
 
         # Store full trajectories
         self.trajectories = torch.zeros((num_trajs, num_timesteps, num_states), device=self.device)
-        self.control = control_norm * torch.ones((num_trajs, num_timesteps, num_controls), device=self.device)
+        self.duty_cycle = control_norm * torch.ones((num_trajs, num_timesteps, num_controls), device=self.device)
+        self.control = torch.tensor(15.0, device=self.device)
 
         if self.dataset == "open":            
             # Store time points
@@ -47,13 +49,13 @@ class BoostConverterDataset(Dataset):
         elif self.dataset == "closed":
             for i, data in enumerate(df["data"].values()):
                 self.trajectories[i] = torch.tensor(data[:num_timesteps,:num_states], device=self.device)
-                self.control[i] = torch.tensor(data[:num_timesteps,num_states:num_states+num_controls], device=self.device)
+                self.duty_cycle[i] = torch.tensor(data[:num_timesteps,num_states:num_states+num_controls], device=self.device)
             
             self.times = torch.zeros((num_trajs, num_timesteps), device=self.device)
             for i, time in enumerate(df["T"].values()):
                 self.times[i] = torch.tensor(time[:num_timesteps], device=self.device)
             
-            self.control = 1 - self.control # Required due to data format
+            self.duty_cycle = 1 - self.duty_cycle # Required due to data format
             self.t_scale = (self.times[:,-1] - self.times[:,0]).mean(dim=0)
         
         # Normalize if needed
@@ -100,14 +102,16 @@ class BoostConverterDataset(Dataset):
             x0 = self.trajectories[idx, start_idx].clone()
             t = times[start_idx:end_idx] - times[start_idx]
             y = self.trajectories[idx, start_idx:end_idx]
-            u = self.control[idx, start_idx:end_idx]
+            u = self.control
+            info = self.duty_cycle[idx, start_idx:end_idx]
             
-            return x0, t, y, u
+            return x0, t, y, u, info
         else:
             # For validation, return full trajectory
             x0 = self.trajectories[idx,0].clone()
             t = times - times[0]
             y = self.trajectories[idx]
-            u = self.control[idx]
+            u = self.control
+            info = self.duty_cycle[idx]
             
-            return x0, t, y, u
+            return x0, t, y, u, info

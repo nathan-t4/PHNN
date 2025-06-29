@@ -2,9 +2,9 @@ import os
 import torch as th
 from ml_collections import ConfigDict
 
-def get_boost_converter_config():
+def get_inverter_config():
     config = ConfigDict()
-    config.system_name = "boost_converter"
+    config.system_name = "inverter"
     config.experiment_name = "OpenLoop"
 
     config.data = data = ConfigDict()
@@ -14,7 +14,7 @@ def get_boost_converter_config():
     data.scale = True
 
     config.net_cfg = net_cfg = ConfigDict()
-    net_cfg.model_name = "LatentPHNODE"
+    net_cfg.model_name = "PHNODE"
     net_cfg.model = "RNN" # only relevant for latent models
     net_cfg.quadratic_H = False
     net_cfg.in_dim = 2
@@ -34,7 +34,7 @@ def get_boost_converter_config():
     config.system_matrices = matrices = ConfigDict()
     matrices.J = lambda u : [[0, -u], [u, 0]] # None
     matrices.R = [[0, 0], [0, 1/r]]
-    matrices.B = [[1], [0]]
+    matrices.B = [[1/M, 0], [0, 1/tau]]
 
     matrices.J_cfg = J_cfg = ConfigDict()
     J_cfg.learn_matrix = False

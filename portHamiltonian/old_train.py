@@ -6,40 +6,48 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 import matplotlib.pyplot as plt
-from torchdiffeq import odeint
-# from torchdiffeq import odeint_adjoint as odeint
-
 from datetime import datetime
+from functools import partial
+
 from utils import *
 from portHamiltonian.models.get_model import get_model
 from portHamiltonian.datasets.get_dataset import get_dataset
 from portHamiltonian.configs.get_config import get_config
 
+from portHamiltonian.models.model_utils import *
+
 # Torch backends
-torch.set_default_dtype(torch.float64)
+default_dtype = torch.float64
+torch.set_default_dtype(default_dtype)
 torch.manual_seed(0)
 torch.backends.cudnn.benchmark = True
-# The control
-control_input = torch.tensor(15.0)
+torch.backends.cudnn.enabled = False
 
 def train_one_epoch(iteration, writer: SummaryWriter, dataloader, model: nn.Module, loss_fn, optimizer):
+    global config
     model.train()
 
     batch_loss = 0.0
     total_norm = 0.0
-    for batch, (x0, t, y, u) in enumerate(dataloader):
+    for batch, (x0, t, y, u, info) in enumerate(dataloader):
         optimizer.zero_grad()
+        model.zero_grad()
 
         loss = 0.0
         batch_size = x0.shape[0]
         # Integrate ODE for each initial condition
-
         for i in range(batch_size):
-            matrix_input = lambda tt : input_interp(tt, t[i], u[i])
-            y_pred = model.solve_ode(t[i], x0[i].unsqueeze(0), control_input, matrix_input)
+            control_input = lambda tt : input_interp(tt, t[i], u[i]) if len(u[i].shape) > 0 else u[i]
+            matrix_input = partial(get_matrix_input(config.system_name, t=t, duty_factor=info, state=x0), idx=i)
+            y_pred = model.solve(t[i], x0[i].unsqueeze(0), control_input) if is_baseline_model(model) else model.solve(t[i], x0[i].unsqueeze(0), control_input, matrix_input)
             # Compute loss over full trajectories
-            loss += loss_fn(y_pred.squeeze(), y[i])
-
+            if isinstance(model, NSDE):
+                # for NSDE, loss should be average over multiple sampled trajectories.
+                for i in range(config.training.np):
+                    y_pred = model.solve(t[i], x0[i].unsqueeze(0), control_input) if is_baseline_model(model) else model.solve(t[i], x0[i].unsqueeze(0), control_input, matrix_input)
+                    loss += (1/config.training.np) * loss_fn(y_pred.squeeze(), y[i])
+            else:
+                loss += loss_fn(y_pred.squeeze(), y[i])
 
         # Clip gradients
         # torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -63,28 +71,33 @@ def train_one_epoch(iteration, writer: SummaryWriter, dataloader, model: nn.Modu
     return batch_loss / len(dataloader)
 
 def validate(iteration, writer, dataloader, model, loss_fn, plot_dir=None, log_scale=True):
+    global config
     model.eval()
 
     ys = []
     y_preds = []
     T = []
+    u = []
+    info = []
     x0 = None
 
-    for batch, (x,dt,y,u) in enumerate(dataloader):
+    for batch, (x,dt,y,uu,i) in enumerate(dataloader):
         # enumerating over trajectories
         if batch == 0: # TODO: only validate over the first trajectory
             x0 = x
             T = dt.squeeze()
             ys = y.squeeze(dim=0)
-            u = u.squeeze()
-
-    # y_preds = odeint(model, x0, T).squeeze(dim=1)
-    matrix_input = lambda t : input_interp(t, T, u)
-    y_preds = model.solve_ode(T, x0, control_input, matrix_input).squeeze(dim=1)
+            u = uu.squeeze()
+            info = i.squeeze()
+    
+    control_input = lambda tt : input_interp(tt, T, u) if len(u.shape) > 0 else u
+    matrix_input = get_matrix_input(config.system_name, t=T, duty_factor=info, state=ys, validation=True)
+    y_preds = model.solve(T, x0, control_input).squeeze(dim=1) if is_baseline_model(model) else model.solve(T, x0, control_input, matrix_input).squeeze(dim=1)
 
     val_loss = loss_fn(y_preds, ys) / len(T)
     T = T.tolist()
 
+    num_states = x0.shape[1]
     ys = ys.detach().tolist()
     y_preds = y_preds.detach().tolist()
     
@@ -95,8 +108,8 @@ def validate(iteration, writer, dataloader, model, loss_fn, plot_dir=None, log_s
         ys = np.log(ys)
         y_preds = np.log(y_preds)
     
-    plt.plot(T, ys, label=[r"$q$", r"$\phi$"])
-    plt.plot(T, y_preds, label=[r"$\hat{q}$", r"$\hat\phi$"])
+    plt.plot(T, ys, label=[rf"$x_{i}$" for i in range(num_states)])
+    plt.plot(T, y_preds, label=[rf"$\hat x_{i}$" for i in range(num_states)])
     plt.legend()
     plt.xlabel(r"Time $[s]$")
     if log_scale:
@@ -112,7 +125,8 @@ def validate(iteration, writer, dataloader, model, loss_fn, plot_dir=None, log_s
 
     return val_loss
 
-def train(config):
+def train():
+    global config
     device = config.training.device
     print(f"Device: {device}")
 
@@ -121,12 +135,15 @@ def train(config):
     val_data = Dataset(os.path.join(config.data.dir, "val_data.pkl"), device, training=False, dataset=config.data.mode, traj_scale=train_data.traj_scale)
     test_data = Dataset(os.path.join(config.data.dir, "test_data.pkl"), device, training=False, dataset=config.data.mode, traj_scale=train_data.traj_scale)
 
-    log_dir = os.path.join("runs", datetime.now().strftime("%b%d_%H:%M:%S") + "_" + config.system_name + "_" + config.experiment_name)
+    log_dir = os.path.join("runs", config.system_name, config.net_cfg.model_name, datetime.now().strftime("%b%d_%H:%M:%S") + "_" + config.experiment_name)
     writer = SummaryWriter(log_dir)
     os.makedirs(os.path.join(writer.log_dir, "plots"))
 
-    scale = 1 / train_data.traj_scale if config.data.scale else 1.0 # TODO divide by t1 - t0
-    model = get_model(config.net_cfg.model_name)(scale, config.system_matrices, config.net_cfg, device)
+    scale = (1 / train_data.traj_scale) if config.data.scale else 1.0 # TODO divide by t1 - t0
+    if config.net_cfg.model_name in BASELINE_MODELS:
+        model = get_model(config.net_cfg.model_name)(scale, config.net_cfg, default_dtype, device)
+    else:
+        model = get_model(config.net_cfg.model_name)(scale, config.system_matrices, config.net_cfg, default_dtype, device)
 
     optimizer = AdamW(model.parameters(), lr=config.training.learning_rate)
     loss_fn = nn.MSELoss()
@@ -169,6 +186,6 @@ if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--dataset", type=str)
     args = parser.parse_args()
-    
+
     config = get_config(args.dataset)
-    train(config)
+    train()
